@@ -1,11 +1,20 @@
+# TO DO
+# pick up at the bottom
+# Next steps are to clean up the combined dataset, get individual ages throughout, and the summarise somehow. Getting there!
+
+
+#clear data history
+rm(list = ls(all.names = TRUE))
+
 #libraries
 library(tidyverse)
 
 #read in data file
-clean <- as_tibble(read.csv("C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/mongoose_IDs.csv"))
-clean
-names(clean) <- c("rowID", "indiv")
-clean$indiv[clean$indiv=="BM500?"] <- "BM500"
+clean <- as_tibble(read.csv("C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/Mongoose video annotations_edited_updated7jan2020.csv"))
+clean <- clean%>%
+  select(Interaction_ID, daten, Mongoose_Num, Behavior)
+names(clean) <- c("intID", "daten", "indiv", "behavior")
+clean$daten <- as.integer(clean$daten)
 
 lh <- as_tibble(read.csv("C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/warthog_cleaning/lifehistory_Dec2020.csv"))
 names(lh)<-tolower(names(lh))
@@ -15,15 +24,16 @@ lh <- lh%>%
   filter(pack == "1B")
 
 #MATCH NAMES OF MONGOOSES IN D (CLEANING DATA) W/ NAMES IN LH (LIFE HISTORY DATA)
-length(unique(clean$indiv)) #60 unique IDs
+length(unique(clean$indiv)) #56 unique IDs
 
 clean.lh <- lh%>%
   filter(indiv %in% clean$indiv)
-length(unique(clean.lh$indiv)) #50 unique IDs. So 10 are missing/wrong?
+length(unique(clean.lh$indiv)) #51 unique IDs. 5 are wrong
 
 not.lh.indiv <- clean%>%
   filter(!indiv %in% clean.lh$indiv)%>%
   select(indiv)#these are the missing individuals 
+not.lh.indiv
 
 #which videos are these individuals in?
 full.clean.data <- as_tibble(read.csv("C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/Mongoose video annotations_edited P and E.csv"))
@@ -31,8 +41,15 @@ names(full.clean.data)
 
 ids.to.check <- full.clean.data%>%
   filter(Mongoose_Num %in% not.lh.indiv$indiv)
+#write.csv(ids.to.check, file = "C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/Mongoose_IDs_to_check_4Jan2020.csv")  
 
-write.csv(ids.to.check, file = "C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/Mongoose_IDs_to_check_4Jan2020.csv")  
+#these are all IDs that we could not clarify from the raw videos, so remove them from the dataset
+clean <- clean%>%
+  filter(!indiv %in% not.lh.indiv$indiv)
+
+clean%>%
+  filter(indiv %in% lh$indiv)%>%
+  summarise(length(unique(indiv))) #51 now in clean$indiv that match the lh indiv--which is correct!
 
 #####
 #now use Faye's code to get birth and death dates for all members of 1B
@@ -111,4 +128,47 @@ start.end$birth.daten<-ifelse(is.na(start.end$birth.daten),0,start.end$birth.dat
 ####
 # next steps
 # make sure daten is recorded in the cleaning data
-# use daten as date of interest and calculate age following "Group composition" code from Faye. 
+# use daten as date of interest and gather group composition
+
+clean.dates <- clean%>%
+  group_by(intID)%>%
+  slice(1)%>%
+  select(daten)%>%
+  filter(!is.na(daten))
+clean.dates$daten <- as.integer(clean.dates$daten)
+
+length(clean.dates$daten) #35
+length(unique(clean.dates$daten)) #25 - 10 repeated dates
+
+clean.grp.comp <- list()
+
+for (i in 1:length(clean.dates$intID)){
+  data <- start.end%>%
+    filter(start.daten<=as.numeric(clean.dates$daten[i]) & end.daten>=as.numeric(clean.dates$daten[i]))%>%
+    select(birth.daten, indiv, sex)
+  clean.grp.comp[[i]] <- cbind(clean.dates$intID[i], clean.dates$daten[i], data)
+}
+
+#combine list into a single dataframe
+clean.grp.comp <- as_tibble(do.call("rbind", clean.grp.comp))
+#rename columns
+names(clean.grp.comp) <- c("intID", "daten", "birth.daten", "indiv", "sex")
+clean.grp.comp <- clean.grp.comp[,c("intID", "daten", "indiv", "sex", "birth.daten")]
+
+#double check that this looks right
+testdate <- sample(clean$daten,1)
+start.end$indiv[start.end$birth.daten<=testdate & start.end$end.daten>=testdate]
+unique(clean.grp.comp$indiv[clean.grp.comp$clean.daten==testdate])#unique here to account for dates on which >1 cleaning were recorded
+start.end$indiv[start.end$birth.daten<=testdate & start.end$end.daten>=testdate] == unique(clean.grp.comp$indiv[clean.grp.comp$clean.daten==testdate])#yes, these vectors are totally equal!
+
+#OK now we want to combine datasets and add a column to clean.grp.comp for whether that individual (row) was in clean$indiv on that clean.daten
+
+test <- left_join(clean.grp.comp, clean, by = c("daten", "indiv"))
+
+test <- test%>%
+  mutate(in.int = ifelse(test$intID.x!=test$intID.y, "N", "Y"))
+test$in.int <- ifelse(is.na(test$in.int), "N", test$in.int)
+test <- test%>%
+  mutate(clean = ifelse(test$in.int=="Y" & test$behavior=="on", "Y", "N"))
+
+
