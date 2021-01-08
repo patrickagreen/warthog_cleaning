@@ -1,6 +1,8 @@
 #warhog cleaning code
-#NOTE - for some reason select() wasn't working when PAG tried to re-run code, but it had been working before???
-# will try again at a later point.
+#PICK UP AT LINE 177
+
+#setwd (or do it through the GUI, if you're a sucker :))
+setwd("C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/warthog_cleaning/")
 
 #clear data history
 rm(list = ls(all.names = TRUE))
@@ -11,14 +13,23 @@ library(lme4)
 library(multcomp)
 
 #read in data file
-clean <- as_tibble(read.csv("C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/Mongoose video annotations_edited_updated7jan2020.csv"))
+clean <- as_tibble(read.csv("Mongoose video annotations_edited_updated7jan2020.csv"))
 #select only relevant columns and organize data
 clean <- clean[,c("Interaction_ID", "daten", "Mongoose_Num", "Behavior")]
 names(clean) <- c("intID", "daten", "indiv", "behavior")
-clean$daten <- as.integer(clean$daten)
+clean$daten[clean$daten=="unrecorded"]<-NA
+clean<-clean[!is.na(clean$daten),]
+clean$daten <- as.numeric(clean$daten)#this magically worked for Patrick on 8 Jan 
+#clean$daten<-as.numeric(levels(clean$daten)[clean$daten]) ##this turns daten into a numeric from a factor without actually screwing up the numbers
+
+#there are instances where behavior = gone, going, near, past. we want these to all = observed, b/c they mean the same thing
+clean <- clean%>%
+  filter(behavior!="off")%>%
+  mutate(behavior = as.factor(ifelse(behavior=="on", "on", "observed")))
+
 
 #read in life history data
-lh <- as_tibble(read.csv("C:/Users/Patrick/Dropbox (Personal)/Personal/Eleanor and Patrick/Mongoose Project/Data analysis/warthog_cleaning/lifehistory_Dec2020.csv"))
+lh <- as_tibble(read.csv("lifehistory_Dec2020.csv"))
 names(lh)<-tolower(names(lh))
 #condense life history to only pack 1B
 lh <- lh%>%
@@ -33,7 +44,7 @@ length(unique(clean.lh$indiv)) #51 unique IDs match to the lh data. 5 are wrong 
 
 not.lh.indiv <- clean%>%
   filter(!indiv %in% clean.lh$indiv)%>%
-  select(indiv)#these are the missing individuals -- look them up in the videos to try & clarify IDs
+  dplyr::select(indiv)#these are the missing individuals -- look them up in the videos to try & clarify IDs
 
 #the missing individuals are  all IDs that we could not clarify from the raw videos, so remove them from the dataset
 clean <- clean%>%
@@ -122,9 +133,8 @@ start.end$birth.daten<-ifelse(is.na(start.end$birth.daten),0,start.end$birth.dat
 clean.dates <- clean%>%
   group_by(intID)%>%
   slice(1)%>%
-  select(daten)%>%
+  dplyr::select(daten)%>%
   filter(!is.na(daten))
-clean.dates$daten <- as.integer(clean.dates$daten)
 
 length(clean.dates$daten) #35 cleaning dates
 length(unique(clean.dates$daten)) #25 unique dates - 10 repeated dates
@@ -136,7 +146,7 @@ clean.grp.comp <- list()
 for (i in 1:length(clean.dates$intID)){
   data <- start.end%>%
     filter(start.daten<=as.numeric(clean.dates$daten[i]) & end.daten>=as.numeric(clean.dates$daten[i]))%>%
-    select(birth.daten, indiv, sex)
+    dplyr::select(birth.daten, indiv, sex)
   clean.grp.comp[[i]] <- cbind(clean.dates$intID[i], clean.dates$daten[i], data)
 }
 
@@ -146,20 +156,42 @@ clean.grp.comp <- as_tibble(do.call("rbind", clean.grp.comp))
 names(clean.grp.comp) <- c("intID", "daten", "birth.daten", "indiv", "sex")
 clean.grp.comp <- clean.grp.comp[,c("intID", "daten", "indiv", "sex", "birth.daten")]
 
-#double check tsome of the data--do the individuals w/in the group look right? are they they same individuals in each dataset?
+#double check some of the data--do the individuals w/in the group look right? are they they same individuals in each dataset?
 testdate <- sample(clean$daten,1)
 start.end$indiv[start.end$birth.daten<=testdate & start.end$end.daten>=testdate]
 unique(clean.grp.comp$indiv[clean.grp.comp$daten==testdate])#unique here to account for dates on which >1 cleaning were recorded
 start.end$indiv[start.end$birth.daten<=testdate & start.end$end.daten>=testdate] == unique(clean.grp.comp$indiv[clean.grp.comp$daten==testdate])#yes, these vectors are totally equal!
 
-#combine datasets and add a column for whether a given individual individual (row) was in clean$indiv on the date of the cleaning event
-full.data <- left_join(clean.grp.comp, clean, by = c("daten", "indiv"))
+#combine datasets and add a column for whether a given individual (row) was in clean$indiv on the date (daten) of the cleaning event (intID)
+full.data <- left_join(clean.grp.comp, clean, by = c("intID", "daten", "indiv"))
 
+full.data%>%
+  group_by(intID)%>%
+  filter(duplicated(indiv))
+
+full.data <- full.data%>%
+  group_by(intID, indiv)%>%
+  slice(1)
+
+######
+###COME BACK TO THIS POINT AND GO FROM HERE.
+######
+
+
+#remove any "off" codes--these would be the only instances of duplicates
+full.data%>%
+  group_by(indiv)%>%
+  slice(1)%>%
+  group_by(intID)
+
+#TO CHECK--WHEN INTID.X DOES NOT = INTID.Y IS THAT OK?
 full.data <- full.data%>%
   mutate(in.int = ifelse(full.data$intID.x!=full.data$intID.y, "N", "Y")) #N = indiv was in another intID, not the indicated one, Y = indiv was in indicated interaction, NA = indiv exists in 1B, but was never seen in interaction
 full.data$in.int <- ifelse(is.na(full.data$in.int), "N", full.data$in.int) #make NAs = N
 full.data <- full.data%>%
   mutate(clean = ifelse(full.data$in.int=="Y" & full.data$behavior=="on", "Y", "N")) #make a new column for 'clean' -- if behavior = "on" during the correct video.
+#NEED TO REMOVE REPEATED INDIVIDUAL IDS--ANY ROW WHERE INTID.X DOES NOT EQUAL INTID.Y IS AN INDIVIDUAL THAT WAS ALIVE BUT FOR THE PURPOSES OF THAT INTERACTION WAS JUST ALIVE, SO ASSIGN THEM A NEW CODE LIKE "ALIVE"
+##AND THEN REMOVE DUPLICATES WITHIN AN INTERACTION
 
 #remove unnecessary columns and rename
 full.data <- full.data%>%
