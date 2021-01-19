@@ -1,4 +1,4 @@
-#warhog cleaning code
+#warthog cleaning code
 #PICK UP AT LINE 177
 
 #setwd (or do it through the GUI, if you're a sucker :))
@@ -26,7 +26,7 @@ clean$daten <- as.numeric(clean$daten)#this magically worked for Patrick on 8 Ja
 clean <- clean%>%
   filter(behavior!="off")%>%
   mutate(behavior = as.factor(ifelse(behavior=="on", "on", "observed")))
-
+str(clean$behavior)
 
 #read in life history data
 lh <- as_tibble(read.csv("lifehistory_Dec2020.csv"))
@@ -165,45 +165,28 @@ start.end$indiv[start.end$birth.daten<=testdate & start.end$end.daten>=testdate]
 #combine datasets and add a column for whether a given individual (row) was in clean$indiv on the date (daten) of the cleaning event (intID)
 full.data <- left_join(clean.grp.comp, clean, by = c("intID", "daten", "indiv"))
 
+#this arranges the data by intID, individual, and behavior in reverse alphabetical order (on before observed). It keeps only the first instance for each individual. 
+#so if an indiv was both on & observed in one interaction, it's only listed as "on". If it was observed > 1, it only keeps 1 observed.
+full.data<- full.data%>%
+  group_by(intID, indiv)%>%
+  arrange(intID, indiv, desc(behavior))%>%
+  slice(1)
+
+#check if there are any duplicated individuals (this should be 0)
 full.data%>%
   group_by(intID)%>%
   filter(duplicated(indiv))
 
-full.data <- full.data%>%
-  group_by(intID, indiv)%>%
-  slice(1)
+#replace NA values in "behavior" with "not.seen"
+full.data$behavior <- ifelse(is.na(full.data$behavior), "not.seen", ifelse(full.data$behavior=="on", "on", "observed"))
 
-######
-###COME BACK TO THIS POINT AND GO FROM HERE.
-######
-
-
-#remove any "off" codes--these would be the only instances of duplicates
-full.data%>%
-  group_by(indiv)%>%
-  slice(1)%>%
-  group_by(intID)
-
-#TO CHECK--WHEN INTID.X DOES NOT = INTID.Y IS THAT OK?
-full.data <- full.data%>%
-  mutate(in.int = ifelse(full.data$intID.x!=full.data$intID.y, "N", "Y")) #N = indiv was in another intID, not the indicated one, Y = indiv was in indicated interaction, NA = indiv exists in 1B, but was never seen in interaction
-full.data$in.int <- ifelse(is.na(full.data$in.int), "N", full.data$in.int) #make NAs = N
-full.data <- full.data%>%
-  mutate(clean = ifelse(full.data$in.int=="Y" & full.data$behavior=="on", "Y", "N")) #make a new column for 'clean' -- if behavior = "on" during the correct video.
-#NEED TO REMOVE REPEATED INDIVIDUAL IDS--ANY ROW WHERE INTID.X DOES NOT EQUAL INTID.Y IS AN INDIVIDUAL THAT WAS ALIVE BUT FOR THE PURPOSES OF THAT INTERACTION WAS JUST ALIVE, SO ASSIGN THEM A NEW CODE LIKE "ALIVE"
-##AND THEN REMOVE DUPLICATES WITHIN AN INTERACTION
-
-#remove unnecessary columns and rename
-full.data <- full.data%>%
-  select(!intID.y)%>%
-  select(!behavior)
-names(full.data) <- c("intID", "daten", "indiv", "sex", "birth.daten", "in.int", "clean")
 
 #make some new variables
 full.data <- full.data%>%
   mutate(age = daten - birth.daten)%>% #age on date of cleaning
-  mutate(clean.binary = ifelse(clean=="Y", 1, 0))%>% #binary clean code: if yes = 1, if no = 0
-  mutate(sex2 = as.factor(ifelse(age<365/2, "P", ifelse(full.data$sex=="M", "M", "F")))) #make pups distinct from males & females
+  mutate(clean.binary = ifelse(behavior=="on", 1, 0))
+full.data$sex <- ifelse(full.data$age<365/2, "P", full.data$sex)
+
 #turn character vectors into factors
 full.data$sex <- as.factor(full.data$sex)
 full.data$indiv <- as.factor(full.data$indiv)
@@ -216,34 +199,41 @@ full.data$indiv <- as.factor(full.data$indiv)
 ## prop. int ~ age (e.g., choose first age or average age for individual across all sightings)
 ###
 
+hist(full.data$age)
+hist(log10(full.data$age))
+
 #note here that I maybe need a different RE structure--e.g., nested? 
-mod.1 <- glmer(data = full.data, formula = clean.binary ~ sex2 * scale(age) + (1|indiv) +(1|intID), family = binomial (link = logit))
+mod.1 <- glmer(data = full.data, formula = clean.binary ~ sex * log10(age) + (1|indiv) + (1|intID), family=binomial(link = "logit"), glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+plot(mod.1)
+summary(mod.1)
 #test for significance of fixed effects with post-hoc test
 drop1(mod.1, test = "Chisq") #no significant sex:age interaction
 #make a reduced model that does not include the 2-way interaction
-mod.1.reduced <- glmer(data = full.data, formula = clean.binary ~ sex2 + scale(age) + (1|indiv) +(1|intID), family = binomial (link = logit))
+mod.1.reduced <- glmer(data = full.data, formula = clean.binary ~ sex + log10(age) + (1|indiv) + (1|intID), family=binomial(link = "logit"), glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+plot(mod.1.reduced)
+summary(mod.1.reduced)
 drop1(mod.1.reduced, test = "Chisq") #sex and age are both significant
+
 #use a post-hoc test to get each sex effect.
-summary(glht(mod.1.reduced,linfct = mcp(sex2 = c("M - F = 0",
+summary(glht(mod.1.reduced,linfct = mcp(sex = c("M - F = 0",
                                                   "M - P = 0",
                                                   "F - P = 0"))))
-
 ###
 # prepare to plot data
 # calculate summary values for each individual
-# n.ints = number of interactions individual was there for
+# n.ints = number of interactions individual was there for (removed this for now.)
 # prop.clean = proportion of interactions individual cleaned for
 # mean.age = mean age
 full.data2 <- full.data%>%
   group_by(indiv)%>%
-  mutate(n.ints = length(in.int[in.int=="Y"]))%>%
+  #mutate(n.ints = length(in.int[in.int=="Y"]))%>%
   mutate(prop.clean = sum(clean.binary)/length(clean.binary))%>%
   mutate(mean.age = mean(age))
 
 #check that this worked
 testindiv <- sample(full.data$indiv,1)
 full.data2[full.data2$indiv==testindiv,]
-length(full.data$in.int[full.data$indiv==testindiv & full.data$in.int=="Y"]) #n.ints looks right
+#length(full.data$in.int[full.data$indiv==testindiv & full.data$in.int=="Y"]) #n.ints looks right
 mean(full.data$age[full.data$indiv==testindiv])#looks right for age
 sum(full.data$clean.binary[full.data$indiv==testindiv])/length(full.data$clean.binary[full.data$indiv==testindiv])#and for prop.clean
 
@@ -251,30 +241,18 @@ sum(full.data$clean.binary[full.data$indiv==testindiv])/length(full.data$clean.b
 full.data2 <- full.data2%>%
   group_by(indiv)%>%
   slice(1)%>%
-  select(indiv, sex2, n.ints, prop.clean, mean.age)
+  dplyr::select(indiv, sex, prop.clean, mean.age)
 
 ###
 # plot the model effects
 ###
 #plot the age effect
-ggplot(data = full.data2, aes(x = mean.age, y = prop.clean))+
+ggplot(data = full.data2, aes(x = mean.age, y = prop.clean, col=sex))+
   geom_point()+
-  geom_smooth(method = "lm", se = FALSE)
+  geom_smooth(method = "lm", se = TRUE)+
+  scale_x_continuous(trans="log10")
+  
 #plot the sex effect
-ggplot(data = full.data2, aes(x = sex2, y = prop.clean))+
+ggplot(data = full.data2, aes(x = sex, y = prop.clean))+
   geom_boxplot()+
   geom_jitter(width = 0.05)
-
-#one question to plot -- how much of cleaning is just driven by being near the interaction?
-ggplot(data = full.data2, aes(x = n.ints, y = prop.clean))+
-  geom_point()
-#the more interactions you're in (whether cleaning or no), the more you'll clean
-#is this a thing we want to control for? unsure.
-ggplot(data = full.data2, aes(x = mean.age, y = n.ints))+
-  geom_point()+
-  geom_smooth(method = "lm", se = FALSE)
-#as you get older, you're in more interactions, but the cleaning plot shows you clean less in those interactions
-ggplot(data = full.data2, aes(x = sex2, y = n.ints))+
-  geom_boxplot()+
-  geom_jitter(width = 0.05)
-#similar trend w/ pups as prop.clean, but adult males may clean more than adult females
