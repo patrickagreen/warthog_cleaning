@@ -180,7 +180,6 @@ full.data%>%
 #replace NA values in "behavior" with "not.seen"
 full.data$behavior <- ifelse(is.na(full.data$behavior), "not.seen", ifelse(full.data$behavior=="on", "on", "observed"))
 
-
 #make some new variables
 full.data <- full.data%>%
   mutate(age = daten - birth.daten)%>% #age on date of cleaning
@@ -218,6 +217,15 @@ drop1(mod.1.reduced, test = "Chisq") #sex and age are both significant
 summary(glht(mod.1.reduced,linfct = mcp(sex = c("M - F = 0",
                                                   "M - P = 0",
                                                   "F - P = 0"))))
+
+#another way to look at it (PAG 3 Feb 2021): a quadratic relationship w/ age
+#note here that I maybe need a different RE structure--e.g., nested? 
+mod.2 <- glmer(data = full.data, formula = clean.binary ~ log10(age) + I(log10(age)^2) + sex + (1|indiv) + (1|intID), family=binomial(link = "logit"), glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+plot(mod.2)
+summary(mod.2) #looks like significant effects of age, the quadratic age term, & sex.
+
+#gonna have to refine this model, as I wonder if sex & age should have an interaction term somehwere here. 
+
 ###
 # prepare to plot data
 # calculate summary values for each individual
@@ -247,12 +255,36 @@ full.data2 <- full.data2%>%
 # plot the model effects
 ###
 #plot the age effect
+ggplot(data = full.data2, aes(x = mean.age, y = prop.clean))+#, col=sex))+
+  geom_point()+
+  geom_smooth(method = "lm", formula = y~x + I(x^2), se = TRUE)+
+  #scale_x_continuous(trans="log10")+
+  geom_vline(xintercept = 365/2, lty = 2)+
+  ylab("proportion cleaning")+
+  xlab("age")+
+  theme_bw()
+
+#plot age & sex
 ggplot(data = full.data2, aes(x = mean.age, y = prop.clean, col=sex))+
   geom_point()+
   geom_smooth(method = "lm", se = TRUE)+
-  scale_x_continuous(trans="log10")
+  scale_x_continuous(trans="log10")+
+  ylab("proportion cleaning")+
+  xlab("age")+
+  theme_bw()
   
 #plot the sex effect
 ggplot(data = full.data2, aes(x = sex, y = prop.clean))+
   geom_boxplot()+
-  geom_jitter(width = 0.05)
+  geom_jitter(width = 0.05)+
+  ylab("proportion cleaning")+
+  xlab("sex")
+
+#plot the histogram of # of mongooses & # of interactions
+ggplot(data = full.data2, aes(x = prop.clean))+
+  geom_histogram(fill = "light gray", col = "black")+
+  geom_density(fill = "light blue", alpha = 0.5)+
+  theme_classic()+
+  ylab("number of mongooses")+
+  xlab("proportion of interactions seen cleaning")
+  
