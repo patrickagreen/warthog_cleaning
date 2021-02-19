@@ -227,7 +227,39 @@ summary(mod.2) #looks like significant effects of age, the quadratic age term, &
 #gonna have to refine this model, as I wonder if sex & age should have an interaction term somehwere here. 
 
 ###
-# prepare to plot data
+
+
+#to do w/ this plot
+#identify the individuals that never clean--are they of a certain age?
+no.clean.indiv <- full.data%>%group_by(indiv)%>%summarise(sum.clean = sum(clean.binary))%>%filter(sum.clean==0)%>%dplyr::select(indiv)
+full.data$no.clean <- as.factor(ifelse(full.data$indiv%in%no.clean.indiv$indiv, 1, 0))
+
+test <- full.data%>%group_by(daten, indiv, age)%>%summarise(sum.clean = sum(clean.binary))
+test <- test%>%mutate(clean.yn = ifelse(sum.clean>0, 1, 0))
+
+#plot binary clean 0/1 v age
+par(mfrow = c(2,1))
+
+a <- ggplot(data = test[test$age>30,], aes(x = age, y = clean.yn, col = indiv))+#col = no.clean
+  geom_jitter(height = 0.05)+
+  scale_x_continuous(trans="log10")
+  #geom_smooth(method = "glm", formula = y~poly(x,2,raw=TRUE))#+
+  #geom_density(aes(y = age), fill = "light blue", alpha = 0.5)
+
+b <- ggplot(data = test[test$age>30,])+
+  geom_density(aes(x = age))+
+  scale_x_continuous(trans="log10")
+
+library(ggpubr)
+ggarrange(a, b, ncol = 1, nrow = 2)
+  
+
+#distribution of sampling dates
+ggplot(data = test, aes(x = daten))+
+  geom_histogram()
+
+
+# prepare another plot
 # calculate summary values for each individual
 # n.ints = number of interactions individual was there for (removed this for now.)
 # prop.clean = proportion of interactions individual cleaned for
