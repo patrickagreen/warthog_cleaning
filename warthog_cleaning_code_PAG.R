@@ -32,6 +32,7 @@ str(clean$behavior)
 lh <- as_tibble(read.csv("lifehistory_Dec2020.csv"))
 names(lh)<-tolower(names(lh))
 #condense life history to only pack 1B
+#and filter dates to be only those relevant to our dataset
 lh <- lh%>%
   filter(pack == "1B")
 
@@ -54,6 +55,10 @@ clean <- clean%>%
 clean%>%
   filter(indiv %in% lh$indiv)%>%
   summarise(length(unique(indiv))) #51 now in clean$indiv that match the lh indiv--which is correct!
+
+##If you want a list of all observed mongoose ID's for use in BORIS, make a data file of these ID's
+name.data.file<-as.data.frame(unique(clean$indiv))
+write.csv(name.data.file, "Mongoose_Names.csv")
 
 #####
 # get birth and death dates for all members of 1B
@@ -190,6 +195,131 @@ full.data$sex <- ifelse(full.data$age<365/2, "P", full.data$sex)
 full.data$sex <- as.factor(full.data$sex)
 full.data$indiv <- as.factor(full.data$indiv)
 
+#####
+#incorporate pregnancy and dominance data into full.data
+#####
+
+#####
+# pregnancy
+#####
+lh$code <- as.factor(lh$code)
+#pregnancy is ~60 days before birth, so daten of birth - 60 is pregnancy window
+#can assume pregnancy window between day of abortion and nearest oestrus w/in 60 days of abortion....
+#...or within 28 days of abortion. 
+#can assume pregnancy if code=="FPREG" (first pregnant ID) on day of cleaning event
+
+#load in oestrus data
+oestrus <- read.csv("oestrus.csv",header=T,stringsAsFactors=F)
+names(oestrus) <- tolower(names(oestrus))
+#some filtering 
+oestrus<-oestrus[which(oestrus$guard.id!="NONE" & !is.na(oestrus$guard.id)),]
+oestrus<-oestrus[which(oestrus$strength==1 | oestrus$strength==2 | oestrus$strength==3),]
+oestrus<-oestrus[which(oestrus$confidence==1 | oestrus$confidence==2 | oestrus$confidence==3),]
+oestrus <- oestrus%>%
+  filter(guard.id!="UNK")%>%
+  filter(guard.id!="")%>%
+  filter(group=="1B")
+
+full.data$pregnant <- NA
+
+# a loop to identify pregnancy
+for (i in 1:nrow(full.data)){
+  if(full.data$sex[i]=="P"){ #if not an adult
+    full.data$pregnant[i] <- "pup" #pregnant status = pup
+  } else if(full.data$sex[i]=="M"){ #if sex==M
+    full.data$pregnant[i] <- "male" #pregnant status = male
+  } else {
+    #find FPREG dates
+    preg.dates <- lh$daten[lh$indiv%in%full.data$indiv[i] & lh$code=="FPREG"] 
+    #find birth dates
+    birth.daten <- as.data.frame(lh%>%filter(indiv%in%full.data$indiv[i])%>%filter(code=="BIRTH")%>%dplyr::select(daten)) #simplify lh to that individual's birth codes & select daten
+    birth.daten.range <- unlist(lapply(birth.daten[,1]-60, function(x) seq(x, x+60, 1)))#for each birth.daten, make sequence from 60 days before to birth.daten. 
+    #abortion & oestrus dates
+    abort.daten <- as.data.frame(lh%>%filter(indiv%in%full.data$indiv[i])%>%filter(code=="ABORT")%>%arrange(daten)%>%dplyr::select(daten))#find the dates of the abort codes
+    abort.daten.range <- unlist(lapply(abort.daten[,1]-28, function(x) seq(x, x+28, 1)))#for each abort.daten, make sequence from 28 days before to abort.daten (conservative abortion pregnancy window)
+    oestrus.daten <- unique(oestrus%>%filter(female.id%in%full.data$indiv[i])%>%arrange(daten)%>%dplyr::select(daten)) #find the dates of the oestrus codes
+    preg.windows <- lapply(oestrus.daten[,1], function(x) x-abort.daten[,1]) #find the range of dates between oestrus and abort dates. this is a list where each [[i]] is oestrus date and each value w/in [[i]] is oestrus-abort
+    poss.preg.oes.daten <- NULL #vector for oestrus dates
+    poss.preg.abort.daten <- NULL #vector for abortion dates
+    poss.preg <- as.data.frame(NULL) #empty data frame
+    if(length(preg.windows)==0){ #if there are no oestrus-abort dates (e.g., either no abortions or no oestrus observations)
+      poss.preg.vec <- NULL #set vector to NULL
+    } else{ #if there are oestrus-abort dates
+      for (j in 1:length(preg.windows)){ #for each element in the list preg.windows
+        if(any(preg.windows[[j]]%in%seq(-60,0,1))==FALSE){
+          poss.preg.vec <- NULL
+        }else if(any(preg.windows[[j]]%in%seq(-60,0,1))==TRUE){ #if any values of oestrus-abort are between -60 and 0 (i.e. oestrus was w/in 60 days before abortion)
+          poss.preg.oes.daten[j] <- oestrus.daten[j,1] #save oestrus datens to vector for oestrus dates
+          poss.preg.abort.daten[j] <- abort.daten[which(preg.windows[[j]]%in%seq(-60,0,1)),1] #save corresponding values of abortion dates
+          poss.preg <- as.data.frame(cbind(poss.preg.oes.daten, poss.preg.abort.daten)) #cbind these values  
+          poss.preg <- poss.preg[complete.cases(poss.preg),] #remove NAs
+          fun <-  function(x,y) seq(x,y,by=1) #make a function to do sequence of one value to another
+          poss.preg.vec <- unlist(mapply(fun, poss.preg[,1], poss.preg[,2])) #apply the function to make a vector from each oestrus date (col 1) to each abortion date (col 2)
+        }
+      }
+    }
+    pregnancy.dates <- c(preg.dates, birth.daten.range, abort.daten.range, poss.preg.vec) #combine all the dates across the vectors 
+    if(full.data$daten[i]%in%pregnancy.dates){ #if the daten of the IGI lies in this vector
+      full.data$pregnant[i] <- "pregnant" #female is pregnant
+    } 
+    else{ #if not
+      full.data$pregnant[i] <- "not.pregnant" #female is not pregnant
+    }
+  }
+}
+
+full.data$pregnant <- as.factor(full.data$pregnant) #change pregnant to be a factor
+summary(full.data$pregnant)
+
+#check a few
+check <- sample(which(full.data$pregnant=="not.pregnant"),1) #randomly sample one individual (replace "not.pregnant" w/ "pregnant", "male", "pup" as desired)
+full.data[check,] #find the event for this individual
+lh%>%filter(indiv%in%full.data$indiv[check])%>%arrange(daten) #check this individual's LH records
+i = check
+#indiv BF866 daten 43946--gave birth on daten 43950, 14 days after cleaning event (==pregnant)
+#indiv BF853 on daten 44055--gave birth on 44130, 75 days after event (==not pregnant)
+
+#####
+# dominance status
+#####
+# a male is dominant if it was mate guarding a female on the MOST RECENT oestrus date to a given event. 
+
+oestrus$guard.id <- as.factor(oestrus$guard.id)
+
+full.data$guard <- NA
+full.data$guard_date <- NA
+
+#run a loop to identify dominant v. subordinate males
+for(i in 1:length(full.data$daten)){
+  if(full.data$sex[i]=="P"){
+    full.data$guard[i] <- "pup"
+    full.data$guard_date[i] <- NA
+  }else if(full.data$sex[i]=="F"){
+    full.data$guard[i] <- "female"
+    full.data$guard_date[i] <- NA
+  }else if(full.data$daten[i]<min(oestrus$daten)){
+    full.data$guard[i] <- NA
+    full.data$guard_date[i] <- NA
+  }else{
+    guard_date <-  max(oestrus$daten[which(oestrus$daten<full.data$daten[i])])#find the guard date nearest to the cleaning date
+    full.data$guard_date[i] <- guard_date #set this as the guard date
+    guard_vector <- as.factor(as.vector(oestrus$guard.id[oestrus$daten==guard_date])) #a vector of which group members were oestrus for that guard date
+    full.data$guard[i] <- ifelse(full.data$indiv[i]%in%guard_vector==TRUE, "Y", "N") #if the individual is in the vector, "Y" for guard, otherwise "N"}
+  }
+}
+full.data$guard <- as.factor(full.data$guard)
+summary(full.data$guard)
+
+full.data$guard_IGI_delay <- full.data$daten-full.data$guard_date #new column for days between IGI and guard date
+summary(full.data$guard_IGI_delay)#no guard values are within 180 days--this is a bit surprising isn't it? 
+full.data$guard[which(full.data$guard_IGI_delay>180)] <- NA #any value >180 gets an NA
+summary(full.data$guard)
+#looking more closely at the oestrus dates vs. the cleaning dates, there just haven't been any oestrus events in the proper window.
+View(oestrus%>%arrange(desc(daten)))
+View(full.data%>%arrange(desc(daten)))
+#e.g., 44114 is the most recent cleaning daten and 43935 is the earliest cleaning daten
+#the only relevant oestrus datens are 44207, 44135 (both too late to be considered), and 43589 (too early to be considered)
+
 ###
 # ANALYSIS
 # model of clean (y/n) ~ sex * age + (1|indiv)
@@ -198,17 +328,20 @@ full.data$indiv <- as.factor(full.data$indiv)
 ## prop. int ~ age (e.g., choose first age or average age for individual across all sightings)
 ###
 
+#consider just using pregnant instead of sex, as pregnant includes males, pups, pregnant females & non-pregnant females
+#or maybe we first test if pregnancy matters, and then if it doesn't we just replace it w/ sex (i.e. lump all females together)
+
 hist(full.data$age)
 hist(log10(full.data$age))
 
 #note here that I maybe need a different RE structure--e.g., nested? 
-mod.1 <- glmer(data = full.data, formula = clean.binary ~ sex * log10(age) + (1|indiv) + (1|intID), family=binomial(link = "logit"), glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+mod.1 <- glmer(data = full.data, formula = clean.binary ~ pregnant * log10(age) + (1|indiv) + (1|intID), family=binomial(link = "logit"), glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
 plot(mod.1)
 summary(mod.1)
 #test for significance of fixed effects with post-hoc test
 drop1(mod.1, test = "Chisq") #no significant sex:age interaction
 #make a reduced model that does not include the 2-way interaction
-mod.1.reduced <- glmer(data = full.data, formula = clean.binary ~ sex + log10(age) + (1|indiv) + (1|intID), family=binomial(link = "logit"), glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+mod.1.reduced <- glmer(data = full.data, formula = clean.binary ~ pregnant + log10(age) + (1|indiv) + (1|intID), family=binomial(link = "logit"), glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
 plot(mod.1.reduced)
 summary(mod.1.reduced)
 drop1(mod.1.reduced, test = "Chisq") #sex and age are both significant
