@@ -57,8 +57,8 @@ clean%>%
   summarise(length(unique(indiv))) #51 now in clean$indiv that match the lh indiv--which is correct!
 
 ##If you want a list of all observed mongoose ID's for use in BORIS, make a data file of these ID's
-name.data.file<-as.data.frame(unique(clean$indiv))
-write.csv(name.data.file, "Mongoose_Names.csv")
+#name.data.file<-as.data.frame(unique(clean$indiv))
+#write.csv(name.data.file, "Mongoose_Names.csv")
 
 #####
 # get birth and death dates for all members of 1B
@@ -319,6 +319,56 @@ View(oestrus%>%arrange(desc(daten)))
 View(full.data%>%arrange(desc(daten)))
 #e.g., 44114 is the most recent cleaning daten and 43935 is the earliest cleaning daten
 #the only relevant oestrus datens are 44207, 44135 (both too late to be considered), and 43589 (too early to be considered)
+
+#####
+#escorting status
+#####
+escort <- as_tibble(read.csv("pup_association_march2021.csv"))
+names(escort) <- tolower(names(escort))
+escort <- escort%>%
+  filter(group=="1B")
+
+## If strength and confidence not =1 then convert escort to NA (i.e. only consider when strength and conf =1)
+escort$escort<-with(escort,ifelse(strength==1 & confidence==1,escort,NA))
+
+for(i in 1:length(full.data$indiv)){
+  focal.esc<-escort[which(escort$daten<full.data$daten[i]),] #find escort dates before date of interest
+  focal.esc$session.id<-with(focal.esc,paste(daten,session)) #note date & time of escorting session
+  
+  grp.esc.freq<-length(unique(focal.esc$session.id)) #note total # of times the pack was escorting?
+  
+  esc.obs<-with(focal.esc[which(focal.esc$pup==full.data$indiv[i]),], #note # of times individual was in escorting relationship
+                tapply(daten,escort,length))
+  
+  if(grp.esc.freq==0){ #if the group did not have observed escorting
+    full.data$pup.esc.freq[i]<-0 #set all these to 0
+    full.data$grp.esc.freq[i]<-0
+    full.data$pup.esc.no[i]<-0
+  }
+  
+  else { #otherwise...
+    temp.esc<-focal.esc[which(focal.esc$pup==full.data$indiv[i]),] #find the escort data for the individual of interest
+    
+    if(sum(is.na(temp.esc$escort))==0){ #if there are no NAs for escort data for that indiv
+      full.data$pup.esc.freq[i]<-with(temp.esc,length(unique(session.id))) #esc. frequency is the # of escorting sessions
+      full.data$grp.esc.freq[i]<-grp.esc.freq #group esc. frequency is same as group above
+      full.data$pup.esc.no[i]<-length(esc.obs)} #pup.esc.no is # of escort observations
+    
+    if(sum(is.na(temp.esc$escort))>0){ #if there are NAs
+      full.data$pup.esc.freq[i]<-with(temp.esc[which(!is.na(temp.esc$escort)),],
+                               length(unique(session.id))) #just switch this to account for NAs
+      full.data$grp.esc.freq[i]<-grp.esc.freq #this is the same as above
+      full.data$pup.esc.no[i]<-length(esc.obs)} #this is the same as above
+    
+    
+  }
+}
+
+
+## Proportion of observed escorting session that the individual was observed being escorted (NA if litter not escorted)
+full.data$escort.index<-ifelse(full.data$grp.esc.freq==0,NA,full.data$pup.esc.freq/full.data$grp.esc.freq)
+range(full.data$escort.index,na.rm=T) # 0 1
+
 
 ###
 # ANALYSIS
