@@ -327,17 +327,75 @@ escort <- as_tibble(read.csv("pup_association_march2021.csv"))
 names(escort) <- tolower(names(escort))
 escort <- escort%>%
   filter(group=="1B")
-
 ## If strength and confidence not =1 then convert escort to NA (i.e. only consider when strength and conf =1)
 escort$escort<-with(escort,ifelse(strength==1 & confidence==1,escort,NA))
 
+
+#we want to know who escorted whom. 
+# so link up the ID of the escort with the ID of the pup in our full.data dataset
+#don't worry about doing it w/in the full.data structure just yet. make a new dataset
+pups.to.link <- full.data%>%filter(behavior=="on", sex=="P")%>%arrange(indiv)#find the pups you want to link w/ escorts
+escort.rels <- data.frame(matrix(nrow = nrow(full.data%>%filter(behavior=="on", sex=="P")), ncol = 2))#make an empty dataframe to fill (so far I know the max # escorts = 2)
+for (i in 1:nrow(pups.to.link)){#for each row in full data
+    escort.ids <- unique(escort$escort[escort$pup%in%pups.to.link$indiv[i] & !is.na(escort$escort)])#find all escort IDs in escort where the pup was the same as indiv[i]
+    escort.rels[i,1:length(escort.ids)] <- escort.ids #paste these adult IDs as escort.rels[i]
+}
+escort.rels$pup.id <- pups.to.link$indiv
+escort.rels <- escort.rels[,c(3,1,2)]
+names(escort.rels) <- c("pup.id", "escort1", "escort2")
+#make sure this matches up w/ escort data
+escort%>%filter(pup=="BM927")
+#only save unique rows
+escort.rels <- escort.rels[!duplicated(escort.rels$pup.id),]
+#ok now this is just a data frame w/ each pup ID and the escort IDs for that pup. 
+
+#now we can ask whether these escort IDs were found also to be on behavior=="on" in the cleaning dataset. 
+escort.vec <- c(escort.rels$escort1,escort.rels$escort2[!is.na(escort.rels$escort2)])
+full.data%>%filter(behavior=="on")%>%filter(indiv%in%escort.vec)#yeah there's 72 individuals here.
+
+#OK so now what's the question? are pups that clean at a given time more likely to be cleaning with their escorts than with any other individual? 
+#so this means find a pup ID and see if the escort1 or escort2 for that pup were in the same intID
+
+full.data%>%filter(behavior=="on")%>%filter(intID%in%full.data$intID[full.data$indiv==escort.rels$pup.id[1]])
+
+#is cleaning in pups predicted by the cleaning frequency of their escort?
+#i.e. are you more likely to clean as a pup if you're escorted by an adult who cleans a lot?
+
+
+
+
+
+#old version that I'm not sure I like
+full.data$escort.rels <- NA
+for (i in 1:nrow(full.data)){#for each row in full data
+  if(full.data$sex[i]=="P"){#if it's a pup
+    escort.ids <- unique(escort$escort[escort$pup%in%full.data$indiv[i] & !is.na(escort$escort)])#find all escort IDs in escort where the pup was the same as indiv[i]
+    full.data$escort.rels[i] <- paste(escort.ids, collapse=".") #paste these adult IDs as escort.rels[i]
+  } else{ #if it's not a pup (i.e. is an adult)
+    escort.ids <- unique(escort$pup[escort$escort%in%full.data$indiv[i] & !is.na(escort$escort)]) #find all the pup IDs where the escort was the same as indiv[i]
+    full.data$escort.rels[i] <- paste(escort.ids, collapse=".")#paste these pup IDs as escort.rels[i]
+  }
+}
+full.data$escort.rels <- ifelse(full.data$escort.rels=="", NA, full.data$escort.rels)
+#so now we have a column linking every adult & every pup if they were found cleaning.
+
+#find all the pups that were noted as "on"
+full.data%>%filter(behavior=="on", sex=="P")%>%arrange(indiv)%>%dplyr::select(escort.rels)
+#now are these escort.rels also found in full.data%>%filter(behavior=="on")??
+escort.string <- full.data%>%filter(behavior=="on", sex=="P")%>%arrange(indiv)%>%dplyr::select(escort.rels)
+escort.string <- escort.string[,3]
+
+
+###
+#escorting index code here (I don't think we need this?)
+###
 for(i in 1:length(full.data$indiv)){
   focal.esc<-escort[which(escort$daten<full.data$daten[i]),] #find escort dates before date of interest
   focal.esc$session.id<-with(focal.esc,paste(daten,session)) #note date & time of escorting session
   
   grp.esc.freq<-length(unique(focal.esc$session.id)) #note total # of times the pack was escorting?
   
-  esc.obs<-with(focal.esc[which(focal.esc$pup==full.data$indiv[i]),], #note # of times individual was in escorting relationship
+  esc.obs<-with(focal.esc[which(focal.esc$pup==full.data$indiv[i]),], #note # of times pup was in being escorted
                 tapply(daten,escort,length))
   
   if(grp.esc.freq==0){ #if the group did not have observed escorting
@@ -350,25 +408,28 @@ for(i in 1:length(full.data$indiv)){
     temp.esc<-focal.esc[which(focal.esc$pup==full.data$indiv[i]),] #find the escort data for the individual of interest
     
     if(sum(is.na(temp.esc$escort))==0){ #if there are no NAs for escort data for that indiv
-      full.data$pup.esc.freq[i]<-with(temp.esc,length(unique(session.id))) #esc. frequency is the # of escorting sessions
+      full.data$pup.esc.freq[i]<-with(temp.esc,length(unique(session.id))) #esc.frequency is the # of escorting sessions in which the pup was involved
       full.data$grp.esc.freq[i]<-grp.esc.freq #group esc. frequency is same as group above
-      full.data$pup.esc.no[i]<-length(esc.obs)} #pup.esc.no is # of escort observations
-    
-    if(sum(is.na(temp.esc$escort))>0){ #if there are NAs
+      full.data$pup.esc.no[i]<-length(esc.obs)} #pup.esc.no is # of times the pup was escorted
+    else if(sum(is.na(temp.esc$escort))>0){ #if there are NAs
       full.data$pup.esc.freq[i]<-with(temp.esc[which(!is.na(temp.esc$escort)),],
                                length(unique(session.id))) #just switch this to account for NAs
       full.data$grp.esc.freq[i]<-grp.esc.freq #this is the same as above
       full.data$pup.esc.no[i]<-length(esc.obs)} #this is the same as above
-    
-    
   }
 }
 
-
-## Proportion of observed escorting session that the individual was observed being escorted (NA if litter not escorted)
+## escort index is the proportion of total escorting events in the group for which the pup was observed being escorted
+#e.g., escort.index==0.1 when the pup was involved in 1/10 escorting observations in the group
 full.data$escort.index<-ifelse(full.data$grp.esc.freq==0,NA,full.data$pup.esc.freq/full.data$grp.esc.freq)
-range(full.data$escort.index,na.rm=T) # 0 1
+range(full.data$escort.index,na.rm=T) # 0 to 0.01; so the max a pup was being escorted was 1% of the time???
+hist(full.data$escort.index)
 
+plot(full.data$grp.esc.freq~full.data$daten)#later dates involve more overall group escorting observations, as expected
+plot(full.data$pup.esc.freq[full.data$sex=="P"]~full.data$age[full.data$sex=="P"])#older pups are escorted more, as expected
+
+#it could be that our escorting index is super low b/c we just don't have enough observations for the group overall. 
+#or, maybe I need to 
 
 ###
 # ANALYSIS
@@ -409,9 +470,7 @@ summary(mod.2) #looks like significant effects of age, the quadratic age term, &
 
 #gonna have to refine this model, as I wonder if sex & age should have an interaction term somehwere here. 
 
-###
-
-
+##
 #to do w/ this plot
 #identify the individuals that never clean--are they of a certain age?
 no.clean.indiv <- full.data%>%group_by(indiv)%>%summarise(sum.clean = sum(clean.binary))%>%filter(sum.clean==0)%>%dplyr::select(indiv)
