@@ -334,35 +334,64 @@ escort$escort<-with(escort,ifelse(strength==1 & confidence==1,escort,NA))
 #we want to know who escorted whom. 
 # so link up the ID of the escort with the ID of the pup in our full.data dataset
 #don't worry about doing it w/in the full.data structure just yet. make a new dataset
-pups.to.link <- full.data%>%filter(behavior=="on", sex=="P")%>%arrange(indiv)#find the pups you want to link w/ escorts
-escort.rels <- data.frame(matrix(nrow = nrow(full.data%>%filter(behavior=="on", sex=="P")), ncol = 2))#make an empty dataframe to fill (so far I know the max # escorts = 2)
+pups.to.link <- full.data%>%filter(sex=="P")%>%group_by(indiv)%>%distinct(indiv)%>%arrange(indiv)#find the pups you want to link w/ escorts (behavior=="on",)
+escort.rels <- data.frame(matrix(nrow = nrow(pups.to.link), ncol = 2))#make an empty dataframe to fill (so far I know the max # escorts = 2)
 for (i in 1:nrow(pups.to.link)){#for each row in full data
     escort.ids <- unique(escort$escort[escort$pup%in%pups.to.link$indiv[i] & !is.na(escort$escort)])#find all escort IDs in escort where the pup was the same as indiv[i]
-    escort.rels[i,1:length(escort.ids)] <- escort.ids #paste these adult IDs as escort.rels[i]
+    if(length(escort.ids)==0){#if there are no escorts for the pup
+      escort.rels[i,] <- NA  #make it an NA
+    } else{ #otherwise
+      escort.rels[i,1:length(escort.ids)] <- escort.ids #paste these adult IDs as escort.rels[i]
+    }
 }
-escort.rels$pup.id <- pups.to.link$indiv
-escort.rels <- escort.rels[,c(3,1,2)]
-names(escort.rels) <- c("pup.id", "escort1", "escort2")
-#make sure this matches up w/ escort data
-escort%>%filter(pup=="BM927")
+
+escort.rels$pup.id <- pups.to.link$indiv #give pups IDs
+escort.rels <- escort.rels[,c(3,1,2)] #rearrange
+names(escort.rels) <- c("pup.id", "escort1", "escort2")#change names
+#make sure this matches up w/ escort data, i.e. spot check a few
+escort%>%filter(pup=="BF913")
 #only save unique rows
 escort.rels <- escort.rels[!duplicated(escort.rels$pup.id),]
 #ok now this is just a data frame w/ each pup ID and the escort IDs for that pup. 
 
 #now we can ask whether these escort IDs were found also to be on behavior=="on" in the cleaning dataset. 
-escort.vec <- c(escort.rels$escort1,escort.rels$escort2[!is.na(escort.rels$escort2)])
-full.data%>%filter(behavior=="on")%>%filter(indiv%in%escort.vec)#yeah there's 72 individuals here.
-
-#OK so now what's the question? are pups that clean at a given time more likely to be cleaning with their escorts than with any other individual? 
-#so this means find a pup ID and see if the escort1 or escort2 for that pup were in the same intID
-
-full.data%>%filter(behavior=="on")%>%filter(intID%in%full.data$intID[full.data$indiv==escort.rels$pup.id[1]])
+escort.vec <- unique(c(escort.rels$escort1[!is.na(escort.rels$escort1)],escort.rels$escort2[!is.na(escort.rels$escort2)]))#make a vector of all the adults who escorted
+full.data%>%filter(indiv%in%escort.vec)%>%group_by(indiv)%>%summarise(n.clean = length(behavior[behavior=="on"]))#14 individuals w/ the listed # times they cleaned.
 
 #is cleaning in pups predicted by the cleaning frequency of their escort?
 #i.e. are you more likely to clean as a pup if you're escorted by an adult who cleans a lot?
+#so actually we want to know how many pups did NOT clean...
+#how many times did these pups clean?
+pup.clean.data <- full.data%>%filter(indiv%in%pups.to.link$indiv, sex=="P")%>%group_by(indiv)%>%summarise(n.pup.cleans = length(behavior[behavior=="on"]))#once or twice
+names(pup.clean.data)[1] <- "pup.id"
+pup.clean.data <- pup.clean.data%>%arrange(pup.id)
+#how many times did adults clean?
+full.data%>%filter(behavior=="on")%>%filter(indiv%in%escort.vec)%>%group_by(indiv)%>%summarise(n.cleans = length(indiv))#13 individuals w/ the listed # times they cleaned.
+#what if I want to predict the # of times the pup cleaned from the total # of times its escort cleaned?
+escort.rels <- escort.rels%>%arrange(pup.id)
+escort.rels$pup.id==pup.clean.data$pup.id #all pup.ids are the same so can merge
+pup.escort.clean.data <- left_join(escort.rels, pup.clean.data, by = "pup.id")
+#now run a loop to calculate # escort cleans
+pup.escort.clean.data$n.escort.cleans <- NA
+for (i in 1:nrow(pup.escort.clean.data)){
+  escort.clean.data <- full.data%>%filter(behavior=="on")%>%filter(indiv%in%pup.escort.clean.data$escort1[i] | indiv%in%pup.escort.clean.data$escort2[i])
+  pup.escort.clean.data$n.escort.cleans[i] <- nrow(escort.clean.data)
+}
+pup.escort.clean.data$binary.pup.clean <- ifelse(pup.escort.clean.data$n.pup.cleans>0, 1, 0)
 
+#plot the relationship
+ggplot(data = pup.escort.clean.data, aes(x = n.escort.cleans, y = binary.pup.clean))+
+  geom_point()+
+  geom_smooth(method = "glm", method.args = list(family=binomial(link = "logit")))
+#mayyyyybe
 
-
+#test a model
+binary.mod <- glm(data = pup.escort.clean.data, formula = binary.pup.clean ~ n.escort.cleans, family = binomial)
+plot(binary.mod)
+hist(resid(binary.mod))
+drop1(binary.mod, test = "Chisq")
+summary(binary.mod)
+#no effect
 
 
 #old version that I'm not sure I like
